@@ -104,6 +104,18 @@ def clean_and_engineer(df: pd.DataFrame) -> pd.DataFrame:
     log.info(f"Final shape → {df.shape[0]:,} rows × {df.shape[1]} columns")
     return df
 
+def get_production_data(engine) -> pd.DataFrame:
+    """
+    ดึงข้อมูล production_data ล่าสุดสำหรับ publish
+    """
+    query = "SELECT * FROM production_data ORDER BY arrival_date DESC"  # เรียงตามวันที่ใหม่สุด
+    try:
+        df = pd.read_sql(query, con=engine)
+        log.info(f"ดึง production_data สำเร็จ → {len(df):,} แถว")
+        return df
+    except Exception as e:
+        log.error(f"อ่าน production_data ล้มเหลว: {e}")
+        raise
 
 def main():
     engine = get_engine()
@@ -140,3 +152,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    
