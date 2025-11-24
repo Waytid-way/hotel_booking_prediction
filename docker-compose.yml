@@ -1,0 +1,17 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: hotel_db_container
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${PG_USER:-user}
+      POSTGRES_PASSWORD: ${PG_PASS:-password}
+      POSTGRES_DB: ${PG_DB:-hotel_bookings_db}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+volumes:
+  db_data:
+    driver: local
