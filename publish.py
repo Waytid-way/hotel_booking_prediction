@@ -1,4 +1,3 @@
-# publish.py ← เวอร์ชันแก้ไขแล้ว (รันได้จริง ไม่ error แน่นอน)
 
 import os
 import logging
@@ -8,9 +7,8 @@ import gspread
 from gspread_dataframe import set_with_dataframe
 from gspread.exceptions import APIError, WorksheetNotFound
 
-# Import จากไฟล์ที่มีอยู่ (DRY principle)
-from transform import get_engine, get_production_data  # ถ้า get_production_data ยังไม่มี → ดูด้านล่าง
 
+from transform import get_engine, get_production_data  
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(message)s",
@@ -32,15 +30,15 @@ def authorize_gsheet():
     
     gc = gspread.service_account(filename=json_path)
     sh = gc.open(sheet_name)
-    worksheet = sh.sheet1  # ใช้ sheet แรก ถ้าต้องการ tab อื่น → sh.worksheet("ชื่อ tab")
+    worksheet = sh.sheet1  
     log.info(f"เชื่อม Google Sheets สำเร็จ → {sh.title} > {worksheet.title}")
     return worksheet
 
-def main() -> None:  # ชื่อต้องเป็น main() เพื่อให้ run_pipeline.py เรียกได้
+def main() -> None: 
     log.info("เริ่ม Publish production_data → Google Sheets")
 
     try:
-        # 1. ดึงข้อมูล (ใช้ของที่มีอยู่แล้วจาก transform.py)
+        
         engine = get_engine()
         df = get_production_data(engine)
 
@@ -50,21 +48,21 @@ def main() -> None:  # ชื่อต้องเป็น main() เพื่�
 
         log.info(f"เตรียมอัพโหลด {len(df):,} แถว...")
 
-        # 2. เชื่อม Google Sheets
+        
         worksheet = authorize_gsheet()
 
-        # 3. ล้าง sheet เก่า (optional แต่ทำให้ข้อมูลสะอาด)
+        
         worksheet.clear()
         log.info("เคลียร์ Sheet เก่าเรียบร้อย")
 
-        # 4. อัพโหลด (ไม่มี breeze — ใช้ default ที่เสถียร)
+        
         set_with_dataframe(
             worksheet,
             df,
             include_index=False,
             include_column_header=True,
-            resize=True,  # ปรับขนาด auto
-            allow_formulas=False  # ป้องกัน formula error
+            resize=True,  
+            allow_formulas=False 
         )
         log.info(f"อัพโหลดสำเร็จ → {len(df):,} แถว ไปยัง Google Sheets")
 
@@ -80,6 +78,5 @@ def main() -> None:  # ชื่อต้องเป็น main() เพื่�
 
     log.info("Publish เสร็จเรียบร้อย! ไปเช็ค Google Sheets ดูข้อมูลใหม่ได้เลย")
 
-# รันเดี่ยวก็ได้ / run_pipeline.py เรียกก็ได้
 if __name__ == "__main__":
     main()
