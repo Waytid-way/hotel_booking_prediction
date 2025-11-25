@@ -1,0 +1,11 @@
+
+pandas==2.2.2
+SQLAlchemy==2.0.29
+
+psycopg2-binary==2.9.9
+
+gspread==6.0.2
+gspread-dataframe==3.3.0
+google-auth==2.29.0
+
+python-dotenv==1.0.1
