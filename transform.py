@@ -1,24 +1,20 @@
 import os
 import logging
-from pathlib import Path
-
 import pandas as pd
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
-
-
+ 
+# Setup Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[logging.StreamHandler()]
 )
 log = logging.getLogger(__name__)
-
+ 
 load_dotenv()
-
-
+ 
 def get_engine():
-    """เชื่อม DB แบบไม่ hard-code อะไรเลย"""
     conn_str = (
         f"postgresql+psycopg2://"
         f"{os.getenv('PG_USER')}:{os.getenv('PG_PASS')}@"
@@ -26,32 +22,39 @@ def get_engine():
         f"{os.getenv('PG_DB')}"
     )
     return create_engine(conn_str, pool_pre_ping=True, future=True)
+ 
+def categorize_lead_time(days):
 
+    if days <= 30:
+        return "0-30 Days (Last Minute)"
+    elif days <= 90:
+        return "31-90 Days (Mid-term)"
+    else:
+        return "> 90 Days (Advance)"
+ 
+def clean_and_engineer_bi(df: pd.DataFrame) -> pd.DataFrame:
 
-def clean_and_engineer(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-
-    # 1. Duplicates – มีจริงใน dataset นี้ ~2-3k
+ 
+    # 1. Duplicates
     n_before = len(df)
     df = df.drop_duplicates().reset_index(drop=True)
     log.info(f"Drop duplicates → {n_before - len(df):,} rows")
-
-    # 2. Missing values (ตามที่คนส่วนใหญ่ทำใน Kaggle)
+ 
+    # 2. Missing values & Data Type Fixes
     df["children"] = df["children"].fillna(0).astype("int32")
-    df["country"] = df["country"].fillna("Unknown")
+    df["country"] = df["country"].fillna("Unknown") # เก็บไว้ทั้งหมด เพื่อทำ Map Chart
     df["agent"] = df["agent"].fillna(0).astype("int32")
     df["company"] = df["company"].fillna(0).astype("int32")
-
-    # 3. Arrival date – แก้ bug เดิมด้วยการ rename ชัด ๆ
+ 
+    # 3. Arrival Date Construction (สร้างวันที่จริง)
     month_map = {
         "January": 1, "February": 2, "March": 3, "April": 4,
         "May": 5, "June": 6, "July": 7, "August": 8,
         "September": 9, "October": 10, "November": 11, "December": 12
     }
-
     df["month_num"] = df["arrival_date_month"].map(month_map)
-
-    # ถ้า month ไม่ match (ซึ่งไม่น่าเกิด) ให้กลายเป็น NaT แล้วกรองออก
+   
     date_df = df[["arrival_date_year", "month_num", "arrival_date_day_of_month"]].rename(
         columns={
             "arrival_date_year": "year",
@@ -59,85 +62,79 @@ def clean_and_engineer(df: pd.DataFrame) -> pd.DataFrame:
             "arrival_date_day_of_month": "day",
         }
     )
-
     df["arrival_date"] = pd.to_datetime(date_df, errors="coerce")
-    df["day_of_week"] = df["arrival_date"].dt.day_name()
-
-    n_bad_date = df["arrival_date"].isna().sum()
+   
+    # Drop rows with invalid dates
     df = df.dropna(subset=["arrival_date"]).reset_index(drop=True)
-    if n_bad_date:
-        log.info(f"Drop {n_bad_date:,} rows with invalid arrival_date")
-
-    # 4. Nights & Revenue
+ 
+    # 4. Feature Engineering for BI (Human Readable)
+   
+    # 4.1 Revenue Calculation
     df["total_nights"] = df["stays_in_weekend_nights"] + df["stays_in_week_nights"]
     df["total_revenue"] = df["adr"] * df["total_nights"]
-
-    # 5. กรองของเสีย
-    valid = (df["adr"] > 0) & (df["total_nights"] > 0)
+ 
+    # 4.2 Lead Time Grouping (ทำใน Python เลย เร็วกว่าไปทำใน Looker)
+    df["lead_time_group"] = df["lead_time"].apply(categorize_lead_time)
+ 
+    # 4.3 Cancellation Label (ทำให้อ่านง่ายขึ้นในกราฟ)
+    df["status_label"] = df["is_canceled"].map({0: "Check-Out", 1: "Canceled"})
+ 
+    # 5. กรองเฉพาะข้อมูลที่เป็นไปไม่ได้ทางฟิสิกส์ (Negative)
+    # แต่เก็บ High Value (Outliers) ไว้สำหรับ BI
+    valid = (df["adr"] >= 0) & (df["total_nights"] > 0)
     n_invalid = len(df) - valid.sum()
     df = df[valid].reset_index(drop=True)
-    log.info(f"Drop {n_invalid:,} rows → ADR <= 0 หรือ total_nights <= 0")
-
-    # 6. ADR outliers – IQR ตามที่คนทำ Kaggle ชอบใช้
-    q1, q3 = df["adr"].quantile([0.25, 0.75])
-    iqr = q3 - q1
-    lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-    n_outlier = len(df) - df["adr"].between(lower, upper).sum()
-    df = df[df["adr"].between(lower, upper)].reset_index(drop=True)
-    log.info(f"Drop {n_outlier:,} ADR outliers (IQR)")
-
-    # 7. Encoding – ง่าย ๆ แต่พอใช้ ML ได้เลย
-    df = pd.get_dummies(df, columns=["hotel"], dtype=int)
-
-    # Country → top 5 + Other (ป้องกัน column explosion)
-    top5 = df["country"].value_counts().head(5).index
-    df["country"] = df["country"].where(df["country"].isin(top5), "Other")
-    df = pd.get_dummies(df, columns=["country"], dtype=int)
-
-    # 8. ลบของที่ไม่ใช้แล้ว
-    drop_cols = [
-        "arrival_date_year", "arrival_date_month", "arrival_date_day_of_month",
-        "stays_in_weekend_nights", "stays_in_week_nights"
+    if n_invalid > 0:
+        log.info(f"Drop {n_invalid:,} rows → Impossible values (ADR < 0 or Nights = 0)")
+ 
+    # --- REMOVED: ADR Outlier Removal (IQR) ---
+    # BI ต้องโชว์รายได้จริง แม้จะเป็นลูกค้า VIP ที่จ่ายแพงผิดปกติ
+ 
+    # --- REMOVED: One-Hot Encoding ---
+    # BI ต้องการคอลัมน์ 'hotel' และ 'country' แบบเดิมเพื่อทำ Dropdown Filter/Map
+ 
+    # 6. เลือก Column ที่จำเป็น
+    # เก็บ year, month ไว้เผื่อทำ Filter ง่ายๆ ไม่ต้องพึ่ง Date Function
+    keep_cols = [
+        "hotel", "is_canceled", "status_label", "lead_time", "lead_time_group",
+        "arrival_date", "arrival_date_year", "arrival_date_month",
+        "total_nights", "adults", "children", "country", "market_segment",
+        "distribution_channel", "is_repeated_guest", "previous_cancellations",
+        "reserved_room_type", "assigned_room_type", "deposit_type", "agent",
+        "company", "customer_type", "adr", "total_revenue",
+        "required_car_parking_spaces", "total_of_special_requests"
     ]
-    df = df.drop(columns=[c for c in drop_cols if c in df.columns])
-
-    log.info(f"Final shape → {df.shape[0]:,} rows × {df.shape[1]} columns")
+   
+    # กรองเอาเฉพาะ column ที่มีจริง (เผื่อบางอัน drop ไปแล้ว)
+    final_cols = [c for c in keep_cols if c in df.columns]
+    df = df[final_cols]
+ 
+    log.info(f"Final BI shape → {df.shape[0]:,} rows × {df.shape[1]} columns")
     return df
-
-def get_production_data(engine) -> pd.DataFrame:
-    """
-    ดึงข้อมูล production_data ล่าสุดสำหรับ publish
-    """
-    query = "SELECT * FROM production_data ORDER BY arrival_date DESC"  # เรียงตามวันที่ใหม่สุด
-    try:
-        df = pd.read_sql(query, con=engine)
-        log.info(f"ดึง production_data สำเร็จ → {len(df):,} แถว")
-        return df
-    except Exception as e:
-        log.error(f"อ่าน production_data ล้มเหลว: {e}")
-        raise
-
+ 
 def main():
     engine = get_engine()
-
-    log.info("Start loading raw_data (chunked)")
-    chunk_iter = pd.read_sql("SELECT * FROM raw_data", con=engine, chunksize=20_000)
-
+ 
+    log.info("Start BI Data Transformation Pipeline")
+   
+    # ใช้ Chunksize เพื่อประหยัด Memory
+    chunk_iter = pd.read_sql("SELECT * FROM raw_data", con=engine, chunksize=50_000)
+ 
     cleaned_chunks = []
     for i, chunk in enumerate(chunk_iter, start=1):
-        log.info(f"Processing chunk {i} – {len(chunk):,} rows")
-        cleaned = clean_and_engineer(chunk)
+        log.info(f"Processing chunk {i}...")
+        cleaned = clean_and_engineer_bi(chunk)
         if not cleaned.empty:
             cleaned_chunks.append(cleaned)
-
+ 
     if not cleaned_chunks:
-        log.error("No data after cleaning – something went wrong")
+        log.error("No data processed!")
         return
-
+ 
     final_df = pd.concat(cleaned_chunks, ignore_index=True)
-    log.info(f"Total cleaned rows: {len(final_df):,}")
-
-    log.info("Writing to production_data (replace)")
+    log.info(f"Writing {len(final_df):,} rows to 'production_data'...")
+ 
+    # Write to DB (Replace mode เพื่อล้างข้อมูลเก่าที่เป็น ML format ออก)
     final_df.to_sql(
         "production_data",
         con=engine,
@@ -146,11 +143,8 @@ def main():
         method="multi",
         chunksize=10_000,
     )
-
-    log.info("Done – production_data พร้อมใช้งาน")
-
-
+ 
+    log.info("Pipeline Complete: 'production_data' is ready for Looker Studio.")
+ 
 if __name__ == "__main__":
     main()
-
-    
