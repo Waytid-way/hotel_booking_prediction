@@ -1,0 +1,11 @@
+
+__pycache__/
+*.pyc
+venv/
+.venv/
+.pytest_cache/
+
+.env
+google_service_account.json
+credentials.json
+*.log
