@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 version: '3.8'
 services:
   db:
@@ -15,3 +16,48 @@ services:
 volumes:
   db_data:
     driver: local
+=======
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: hotel_pg
+    restart: always
+    environment:
+      POSTGRES_DB: hotel_db
+      POSTGRES_USER: pipeline_user
+      POSTGRES_PASSWORD: supersecretpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline_user -d hotel_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hotel_pipeline
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    env_file:
+      - ./config/.env
+
+    volumes:
+      - .:/app
+      - ./config/.env:/app/config/.env
+
+    working_dir: /app
+
+    command: ["sleep", "infinity"]
+
+volumes:
+  pgdata:
+>>>>>>> 21ff55e155f3eb9ee2ad79805daf749db3d71516
